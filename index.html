@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14181c">
+<title>Control LED BLE</title>
+<style>
+:root{--bg:#14181c;--panel:#1d2329;--line:#2e3740;--text:#e8edf1;--mute:#8a97a3;--go:#3ddc97;--stop:#ff5a5f;--amber:#ffb84d;--blue:#4da3ff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:"Trebuchet MS",Verdana,sans-serif}
+body{max-width:420px;margin:auto;padding:14px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+h1{font-size:20px;margin:0}
+#status{font-size:13px;display:flex;align-items:center;gap:6px;color:var(--mute)}
+#dot{width:10px;height:10px;border-radius:50%;background:var(--stop)}
+#status.on #dot{background:var(--go)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+button{font-family:inherit;border:0;border-radius:12px;font-weight:700;color:#06182e}
+#connect{width:100%;padding:16px;font-size:16px;background:var(--blue)}
+#connect.off{background:#26303a;color:var(--text);border:1px solid var(--line)}
+.row{display:flex;gap:10px}
+.row button{flex:1;padding:34px 0;font-size:20px}
+#on{background:var(--amber);color:#2b1c00}
+#off{background:#26303a;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.4}
+#state{text-align:center;font-size:18px;margin:0 0 14px}
+#log{font-size:12px;color:var(--mute);text-align:center;min-height:16px}
+.hint{font-size:12px;color:var(--mute);text-align:center;margin:8px 0 0}
+button:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+</style>
+</head>
+<body>
+<header>
+  <h1>LED por Bluetooth</h1>
+  <div id="status"><span id="dot"></span><span id="stxt">Desconectado</span></div>
+</header>
+
+<div class="panel">
+  <button id="connect">Buscar y conectar</button>
+  <p class="hint" id="support">Elegí "C3-LED" en la lista.</p>
+</div>
+
+<div class="panel">
+  <p id="state">LED: —</p>
+  <div class="row">
+    <button id="on" disabled>Encender</button>
+    <button id="off" disabled>Apagar</button>
+  </div>
+</div>
+
+<div id="log">Esperando conexión</div>
+
+<script>
+const NUS = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const RX  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const TX  = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const $ = s => document.querySelector(s);
+const enc = new TextEncoder(), dec = new TextDecoder();
+let device, rx, queue = Promise.resolve();
+
+if (!navigator.bluetooth) {
+  $('#support').textContent = 'Este navegador no soporta Web Bluetooth. Usá Chrome en Android, por HTTPS.';
+  $('#connect').disabled = true;
+}
+const log = t => $('#log').textContent = t;
+
+function setStatus(on) {
+  $('#status').classList.toggle('on', on);
+  $('#stxt').textContent = on ? 'Conectado' : 'Desconectado';
+  $('#connect').textContent = on ? 'Desconectar' : 'Buscar y conectar';
+  $('#connect').classList.toggle('off', on);
+  $('#on').disabled = $('#off').disabled = !on;
+  if (!on) $('#state').textContent = 'LED: —';
+}
+
+async function connect() {
+  try {
+    log('Buscando…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [NUS] }, { namePrefix: 'C3' }],
+      optionalServices: [NUS]
+    });
+    device.addEventListener('gattserverdisconnected', () => {
+      setStatus(false); rx = null; log('Conexión perdida.');
+    });
+    log('Conectando…');
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS);
+    rx = await service.getCharacteristic(RX);
+    const tx = await service.getCharacteristic(TX);
+    await tx.startNotifications();
+    tx.addEventListener('characteristicvaluechanged', e => {
+      const m = dec.decode(e.target.value).trim();
+      $('#state').textContent = 'LED: ' + (m === 'LED:ON' ? 'encendido' : 'apagado');
+    });
+    setStatus(true);
+    log('Conectado a ' + (device.name || 'C3'));
+  } catch (err) {
+    setStatus(false);
+    log(err.name === 'NotFoundError' ? 'No se eligió ningún dispositivo.' : 'Error: ' + err.message);
+  }
+}
+
+function send(c) {
+  if (!rx) return;
+  const data = enc.encode(c);
+  queue = queue
+    .then(() => rx.writeValueWithoutResponse ? rx.writeValueWithoutResponse(data) : rx.writeValue(data))
+    .catch(e => log('Error al enviar: ' + e.message));
+}
+
+$('#connect').addEventListener('click', () =>
+  (device && device.gatt.connected) ? device.gatt.disconnect() : connect());
+$('#on').addEventListener('click', () => send('o'));
+$('#off').addEventListener('click', () => send('f'));
+</script>
+</body>
+</html>
